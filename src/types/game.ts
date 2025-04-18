@@ -24,13 +24,15 @@ interface TurnHistory {
   options: [string, string, string, string];
   selectedOption: number; // Index 0-3
   outcome: string;
+  imageUrl?: string | null;
 }
 
 interface CurrentGameState {
   currentTurn: number;
   totalTurns: number; // This seems redundant if we have maxTurns, maybe remove? Or rename maxTurns to totalTurns in metadata? Let's keep for now.
   currentScenario: string;
-  currentImage: string; // URL or identifier
+  currentImage: string | null; // Will store the generated image URL, null initially or if failed
+  currentImageDescription: string; // Store the prompt used for the current image
   currentOptions: [string, string, string, string];
   activePlayer: PlayerId;
 }

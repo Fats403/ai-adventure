@@ -2,10 +2,9 @@ import { z } from "zod";
 
 // Schema for the AI's response when initializing a game
 export const InitialGameStateSchema = z.object({
+  title: z.string().min(1, "Title cannot be empty."),
   scenario: z.string().min(1, "Scenario cannot be empty."),
-  // For now, we'll expect a descriptive string for the image,
-  // which we can later feed into an image generation model.
-  imageDescription: z.string().min(1, "Image description cannot be empty."),
+  imagePrompt: z.string().min(1, "Image prompt cannot be empty."),
   options: z
     .tuple([
       z.string().min(1),

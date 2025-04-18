@@ -22,6 +22,9 @@ import { toast } from "sonner";
 import { api } from "@/trpc/react"; // Import tRPC hook
 import { Separator } from "@/components/ui/separator"; // Import Separator
 import { cn } from "@/lib/utils"; // Import cn helper for conditional classes
+import Image from "next/image";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { ScrollBar } from "@/components/ui/scroll-area";
 
 export default function GameLobbyPage() {
   const params = useParams();
@@ -177,9 +180,9 @@ export default function GameLobbyPage() {
   // --- Active Game View ---
   if (gameData.status === "active") {
     return (
-      <div className="mx-auto flex h-screen max-w-6xl flex-col gap-4 p-4 md:gap-6 md:p-6 lg:p-8">
+      <div className="mx-auto flex min-h-screen max-w-6xl flex-col p-4 md:p-6 lg:p-8">
         {/* Top Bar */}
-        <div className="mb-2 text-center text-xl font-bold tracking-tight">
+        <div className="mb-4 text-center text-xl font-bold tracking-tight">
           Turn {gameData.gameState.currentTurn} / {gameData.metadata.maxTurns} -{" "}
           {activePlayerName}&apos;s Turn
           {isMyTurn ? (
@@ -192,30 +195,51 @@ export default function GameLobbyPage() {
             </Badge>
           )}
         </div>
-        {/* Main Content */}
-        <div className="mb-4 grid flex-grow grid-cols-1 gap-4 overflow-hidden md:grid-cols-2 md:gap-6">
-          <Card className="border-border/50 overflow-hidden border-2 border-dashed">
-            <CardContent className="p-0">
-              <AspectRatio ratio={16 / 9} className="bg-muted/40">
-                <div className="flex h-full items-center justify-center p-6 text-center">
+        {/* Main Content Area - Remove overflow-hidden */}
+        <div className="mb-4 grid flex-grow grid-cols-1 gap-4 md:grid-cols-2 md:gap-6">
+          {/* Image Area - Added responsive min-height */}
+          {/* Sets a minimum height on mobile, allows it to be taller on md+ */}
+          <Card className="border-border/50 flex min-h-[250px] flex-col overflow-hidden border-2 border-dashed p-0 md:min-h-0">
+            <CardContent className="relative flex-grow p-0">
+              {gameData.gameState.currentImage ? (
+                <Image
+                  src={gameData.gameState.currentImage}
+                  alt={
+                    gameData.gameState.currentImageDescription ||
+                    "Current game scene"
+                  }
+                  fill
+                  className="object-cover"
+                  priority={true}
+                  unoptimized
+                />
+              ) : (
+                <div className="bg-muted/40 flex h-full items-center justify-center p-6 text-center">
                   <span className="text-muted-foreground text-lg italic">
-                    {gameData.gameState.currentImage}
+                    {gameData.gameState.currentImageDescription ||
+                      "Image generation pending or failed..."}
                   </span>
                 </div>
-              </AspectRatio>
+              )}
             </CardContent>
           </Card>
-          <Card className="flex flex-col border shadow-sm">
-            <CardHeader>
+
+          {/* Scenario Text Area - Remove h-full */}
+          <Card className="flex flex-col gap-0 border shadow-sm">
+            <CardHeader className="gap-0">
               <CardTitle>Current Situation</CardTitle>
             </CardHeader>
-            <CardContent className="prose dark:prose-invert max-w-none flex-grow overflow-y-auto">
-              <p>{gameData.gameState.currentScenario}</p>
+            {/* Remove overflow-y-auto, add padding if needed directly or let ScrollArea handle it */}
+            <CardContent className="prose dark:prose-invert min-h-[150px] max-w-none flex-grow p-0">
+              <ScrollArea className="h-full w-full p-6">
+                <p>{gameData.gameState.currentScenario}</p>
+                <ScrollBar orientation="vertical" />
+              </ScrollArea>
             </CardContent>
           </Card>
         </div>
-        {/* Options */}
-        <Card className="border shadow-sm">
+        {/* Options Card (no height changes needed) */}
+        <Card className="mb-4 border shadow-sm">
           <CardHeader>
             <CardTitle>Choose Your Action</CardTitle>
             {!isMyTurn && (
@@ -244,7 +268,7 @@ export default function GameLobbyPage() {
             ))}
           </CardContent>
         </Card>
-        {/* Player Status */}
+        {/* Player Status Card (no height changes needed) */}
         <Card className="border shadow-sm">
           <CardHeader>
             <CardTitle>Adventurers</CardTitle>

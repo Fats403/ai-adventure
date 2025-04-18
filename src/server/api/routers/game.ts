@@ -5,7 +5,7 @@ import {
   JoinGameInputSchema,
   StartGameInputSchema,
 } from "@/lib/zod/game";
-import { generateInitialGameState } from "@/server/ai/openai";
+import { generateImage, generateInitialGameState } from "@/server/ai/openai";
 import type { Game } from "@/types/game";
 import { TRPCError } from "@trpc/server";
 import { adminDb } from "@/server/db/firebase-admin"; // Import adminDb only
@@ -44,8 +44,26 @@ export const gameRouter = createTRPCRouter({
 
       console.log(`Creating game for user: ${userId}, name: ${displayName}`);
 
+      let initialImageUrl: string | null = null;
+      let initialImageDescription: string = "No image description provided.";
+
       try {
         const initialState = await generateInitialGameState(concept);
+        initialImageDescription = initialState.imagePrompt;
+
+        // --- Image Generation Step ---
+        try {
+          console.log("Attempting initial image generation...");
+          initialImageUrl = await generateImage(initialState.imagePrompt);
+        } catch (imageError) {
+          console.error(
+            "Initial image generation failed, proceeding without image:",
+            imageError,
+          );
+          // TODO: Consider alternative notification if image fails - maybe store error state?
+          initialImageUrl = null; // Ensure it's null on failure
+        }
+
         const gameId = nanoidGameId();
         const joinCode = nanoidJoinCode();
         const now = Date.now();
@@ -72,7 +90,8 @@ export const gameRouter = createTRPCRouter({
             currentTurn: 1,
             totalTurns: maxTurns,
             currentScenario: initialState.scenario,
-            currentImage: initialState.imageDescription,
+            currentImage: initialImageUrl,
+            currentImageDescription: initialImageDescription,
             currentOptions: initialState.options,
             activePlayer: userId,
           },
