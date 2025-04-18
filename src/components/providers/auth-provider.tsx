@@ -23,52 +23,58 @@ const AuthContext = createContext<AuthContextProps | undefined>(undefined);
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true); // Start loading until first check completes
+  const [isInitialLoadComplete, setIsInitialLoadComplete] = useState(false);
 
   useEffect(() => {
-    // Use onIdTokenChanged to get the user object and react to token refreshes
     const unsubscribe = listenToIdTokenChanges(async (firebaseUser) => {
       console.log("Auth state changed. User:", firebaseUser?.uid ?? "null");
       setUser(firebaseUser);
+
       if (firebaseUser) {
         try {
-          const currentToken = await getIdToken(); // Get initial token
+          const currentToken = await getIdToken();
           setToken(currentToken);
+          console.log("AuthProvider: Initial token fetch successful.");
         } catch (error) {
-          console.error("Error getting initial token:", error);
-          setToken(null); // Ensure token is null on error
+          console.error("AuthProvider: Error getting initial token:", error);
+          setToken(null);
+        } finally {
+          setIsInitialLoadComplete(true);
         }
       } else {
-        setToken(null); // Clear token if user logs out
+        setToken(null);
+        setIsInitialLoadComplete(true);
       }
-      setIsLoading(false); // Initial check done
     });
 
-    // Cleanup subscription on unmount
     return () => unsubscribe();
   }, []);
 
-  // Function to manually get token, exposed via context
   const getToken = async (forceRefresh = false): Promise<string | null> => {
-    if (!user) return null;
+    const currentUser = user;
+    if (!currentUser) {
+      console.warn("getToken called but user state is null.");
+      return null;
+    }
     try {
+      console.log(
+        `getToken: Attempting fetch for user ${currentUser.uid}. Force refresh: ${forceRefresh}`,
+      );
       const newToken = await getIdToken(forceRefresh);
-      setToken(newToken); // Update context state as well
+      setToken(newToken);
       return newToken;
     } catch (error) {
-      console.error("Error refreshing token:", error);
-      setToken(null); // Clear token on error
-      // Potentially sign out user if token refresh fails critically
+      console.error("getToken: Error fetching/refreshing token:", error);
+      setToken(null);
       return null;
     }
   };
 
-  // Show a loading state while Firebase initializes and checks the auth state
+  const isLoading = !isInitialLoadComplete;
+
   if (isLoading) {
-    // Avoid SSR flash of loading skeleton
     return (
       <div className="flex min-h-screen items-center justify-center">
-        {/* Basic full-page loading indicator */}
         <div className="flex flex-col items-center gap-4">
           <Skeleton className="h-12 w-12 rounded-full" />
           <Skeleton className="h-4 w-[250px]" />
@@ -80,9 +86,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }
 
   return (
-    <AuthContext.Provider
-      value={{ user, isLoading: isLoading, token, getToken }}
-    >
+    <AuthContext.Provider value={{ user, isLoading, token, getToken }}>
       {children}
     </AuthContext.Provider>
   );
