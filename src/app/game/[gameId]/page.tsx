@@ -211,7 +211,7 @@ export default function GameLobbyPage() {
                   fill
                   className="object-cover"
                   priority={true}
-                  unoptimized
+                  placeholder="blur"
                 />
               ) : (
                 <div className="bg-muted/40 flex h-full items-center justify-center p-6 text-center">
