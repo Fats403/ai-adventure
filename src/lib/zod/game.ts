@@ -63,3 +63,10 @@ export const JoinGameInputSchema = z.object({
 });
 
 export type JoinGameInput = z.infer<typeof JoinGameInputSchema>;
+
+// Schema for starting a game
+export const StartGameInputSchema = z.object({
+  gameId: z.string().min(10), // Basic length check
+});
+
+export type StartGameInput = z.infer<typeof StartGameInputSchema>;

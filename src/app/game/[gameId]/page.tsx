@@ -1,11 +1,12 @@
 "use client";
 
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   Card,
   CardContent,
   CardDescription,
+  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -16,18 +17,33 @@ import type { Game } from "@/types/game"; // Import the Game type
 import { Skeleton } from "@/components/ui/skeleton"; // For loading state
 import { Badge } from "@/components/ui/badge"; // To display join code nicely
 import { useAuth } from "@/components/providers/auth-provider";
-
-// TODO: Add authentication check - users should likely be logged in to view/join
+import { AspectRatio } from "@/components/ui/aspect-ratio";
+import { toast } from "sonner";
+import { api } from "@/trpc/react"; // Import tRPC hook
+import { Separator } from "@/components/ui/separator"; // Import Separator
+import { cn } from "@/lib/utils"; // Import cn helper for conditional classes
 
 export default function GameLobbyPage() {
   const params = useParams();
+  const router = useRouter();
   const gameId = params.gameId as string;
   const [gameData, setGameData] = useState<Game | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isProcessingTurn, setIsProcessingTurn] = useState(false); // Turn processing state
 
   // TODO: Get current user ID from auth state
-  const { user } = useAuth(); // Replace with actual user ID from auth context
+  const { user, isLoading: isAuthLoading } = useAuth(); // Replace with actual user ID from auth context
+
+  // --- Authentication Check ---
+  useEffect(() => {
+    if (!isAuthLoading && !user) {
+      toast.error("Authentication Required", {
+        description: "Please log in to view a game.",
+      });
+      router.replace("/");
+    }
+  }, [user, isAuthLoading, router]);
 
   useEffect(() => {
     if (!gameId) {
@@ -45,13 +61,20 @@ export default function GameLobbyPage() {
       (snapshot) => {
         const data = snapshot.val();
         if (snapshot.exists() && data) {
-          console.log("Received game data update:", data);
+          console.log(
+            "Received game data update:",
+            data.status,
+            "Turn:",
+            data.gameState?.currentTurn,
+          );
           setGameData(data as Game);
           setError(null);
         } else {
-          console.log(`Game data for ${gameId} does not exist.`);
+          console.log(
+            `Game data for ${gameId} does not exist or user lacks permission.`,
+          );
           setError(
-            `Game not found (ID: ${gameId}). It might have been deleted or the ID is incorrect.`,
+            `Game not found (ID: ${gameId}) or access denied. It might have been deleted or the ID is incorrect.`,
           );
           setGameData(null);
         }
@@ -69,18 +92,46 @@ export default function GameLobbyPage() {
       console.log(`Detaching listener for game: /games/${gameId}`);
       off(gameRef, "value", unsubscribe); // Detach the specific listener callback
     };
-  }, [gameId]); // Re-run effect if gameId changes
+  }, [gameId, user, isAuthLoading]); // Re-run effect if gameId changes
 
   const isCreator = gameData?.metadata?.creator === user?.uid;
 
+  // --- tRPC Mutation for Starting Game ---
+  const startGameMutation = api.game.startGame.useMutation({
+    onSuccess: (data) => {
+      toast.success(data.message || "Game started!");
+      // No need to manually update state, Firebase listener will catch the status change
+    },
+    onError: (error) => {
+      console.error("Start game failed:", error);
+      toast.error("Failed to Start Game", { description: error.message });
+    },
+  });
+
   const handleStartGame = () => {
-    // TODO: Implement start game logic (likely a tRPC mutation)
-    // This mutation would change game.status to 'active'
-    console.log("Start game button clicked - not implemented yet");
-    alert("Starting the game is not yet implemented.");
+    if (!gameId) return;
+    console.log("Attempting to start game:", gameId);
+    startGameMutation.mutate({ gameId }); // Call the mutation
   };
 
-  if (isLoading) {
+  const handleOptionSelect = (optionIndex: number) => {
+    if (!gameData || !user) return;
+    const selectedOption = gameData.gameState.currentOptions[optionIndex];
+    console.log(
+      `Player ${user.uid} selected option ${optionIndex + 1}: "${selectedOption}"`,
+    );
+    toast.info(`You chose: "${selectedOption}"`, {
+      description: "Waiting for AI response...",
+    });
+    setIsProcessingTurn(true);
+    // TODO: Implement processTurn tRPC mutation
+    setTimeout(() => {
+      console.log("Simulated AI processing finished.");
+      // setIsProcessingTurn(false); // This would be set in the mutation's onSettled/onSuccess
+    }, 2000);
+  };
+
+  if (isAuthLoading || isLoading) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center p-4">
         <Card className="w-full max-w-2xl">
@@ -118,71 +169,219 @@ export default function GameLobbyPage() {
   // Determine if the game can be started (basic condition: creator is present and status is waiting)
   const canStartGame = isCreator && gameData.status === "waiting"; // Add more conditions? (e.g., min players)
 
-  return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-gray-100 p-4 dark:bg-gray-900">
-      <Card className="mb-6 w-full max-w-2xl">
-        <CardHeader>
-          <CardTitle>Adventure Lobby: {gameData.metadata.concept}</CardTitle>
-          <CardDescription>Game ID: {gameId}</CardDescription>
-          <div className="pt-2">
-            <span className="mr-2 text-sm font-medium">Join Code:</span>
-            <Badge
-              variant="secondary"
-              className="cursor-pointer font-mono text-lg tracking-widest"
-              title="Click to copy (not implemented)"
-            >
-              {gameData.metadata.joinCode}
+  // Determine roles and current player info
+  const isMyTurn = user?.uid === gameData.gameState.activePlayer;
+  const activePlayer = gameData.players[gameData.gameState.activePlayer];
+  const activePlayerName = activePlayer?.name ?? "Unknown Player";
+
+  // --- Active Game View ---
+  if (gameData.status === "active") {
+    return (
+      <div className="mx-auto flex h-screen max-w-6xl flex-col gap-4 p-4 md:gap-6 md:p-6 lg:p-8">
+        {/* Top Bar */}
+        <div className="mb-2 text-center text-xl font-bold tracking-tight">
+          Turn {gameData.gameState.currentTurn} / {gameData.metadata.maxTurns} -{" "}
+          {activePlayerName}&apos;s Turn
+          {isMyTurn ? (
+            <Badge variant="default" className="ml-3 bg-green-600 align-middle">
+              Your Turn
             </Badge>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <h3 className="mb-3 text-lg font-semibold">
-            Players ({Object.keys(gameData.players ?? {}).length}):
-          </h3>
-          <ul className="mb-6 list-inside list-disc space-y-1">
-            {gameData.players &&
-              Object.entries(gameData.players).map(([id, player]) => (
-                <li key={id} className="flex items-center justify-between">
-                  <span>
-                    {player.name}
-                    {id === gameData.metadata.creator && (
-                      <Badge variant="outline" className="ml-2">
-                        Creator
-                      </Badge>
-                    )}
+          ) : (
+            <Badge variant="outline" className="ml-3 align-middle">
+              Waiting
+            </Badge>
+          )}
+        </div>
+        {/* Main Content */}
+        <div className="mb-4 grid flex-grow grid-cols-1 gap-4 overflow-hidden md:grid-cols-2 md:gap-6">
+          <Card className="border-border/50 overflow-hidden border-2 border-dashed">
+            <CardContent className="p-0">
+              <AspectRatio ratio={16 / 9} className="bg-muted/40">
+                <div className="flex h-full items-center justify-center p-6 text-center">
+                  <span className="text-muted-foreground text-lg italic">
+                    {gameData.gameState.currentImage}
                   </span>
+                </div>
+              </AspectRatio>
+            </CardContent>
+          </Card>
+          <Card className="flex flex-col border shadow-sm">
+            <CardHeader>
+              <CardTitle>Current Situation</CardTitle>
+            </CardHeader>
+            <CardContent className="prose dark:prose-invert max-w-none flex-grow overflow-y-auto">
+              <p>{gameData.gameState.currentScenario}</p>
+            </CardContent>
+          </Card>
+        </div>
+        {/* Options */}
+        <Card className="border shadow-sm">
+          <CardHeader>
+            <CardTitle>Choose Your Action</CardTitle>
+            {!isMyTurn && (
+              <CardDescription>
+                Waiting for {activePlayerName}...
+              </CardDescription>
+            )}
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {gameData.gameState.currentOptions.map((option, index) => (
+              <Button
+                key={index}
+                variant="outline"
+                className={cn(
+                  "h-auto min-h-[60px] justify-start p-4 text-left whitespace-normal transition-colors duration-150",
+                  "hover:bg-accent hover:text-accent-foreground",
+                  !isMyTurn || isProcessingTurn
+                    ? "cursor-not-allowed opacity-60"
+                    : "cursor-pointer",
+                )}
+                disabled={!isMyTurn || isProcessingTurn}
+                onClick={() => handleOptionSelect(index)}
+              >
+                <span className="mr-2 font-bold">{index + 1}.</span> {option}
+              </Button>
+            ))}
+          </CardContent>
+        </Card>
+        {/* Player Status */}
+        <Card className="border shadow-sm">
+          <CardHeader>
+            <CardTitle>Adventurers</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ul className="space-y-3">
+              {Object.entries(gameData.players).map(([id, player], index) => (
+                <li key={id}>
+                  <div
+                    className={cn(
+                      "flex flex-col items-start justify-between gap-2 rounded-md p-2 sm:flex-row sm:items-center",
+                      id === gameData.gameState.activePlayer && "bg-muted/60",
+                    )}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={cn(
+                          "font-medium",
+                          id === gameData.gameState.activePlayer &&
+                            "text-primary",
+                        )}
+                      >
+                        {player.name}
+                      </span>
+                      {id === gameData.metadata.creator && (
+                        <Badge
+                          variant="outline"
+                          className="text-xs font-normal"
+                        >
+                          Creator
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <Badge variant="secondary">HP: {player.health}</Badge>
+                      <Badge variant="secondary">Gold: {player.gold}</Badge>
+                    </div>
+                  </div>
+                  {index < Object.keys(gameData.players).length - 1 && (
+                    <Separator className="mt-3" />
+                  )}
                 </li>
               ))}
-            {!gameData.players && <li>No players yet.</li>}
-          </ul>
+            </ul>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
-          {gameData.status === "waiting" && (
-            <p className="text-center text-gray-600 dark:text-gray-400">
-              Waiting for the creator to start the game...
-            </p>
-          )}
-          {gameData.status === "active" && (
-            <p className="text-center font-semibold text-green-600 dark:text-green-400">
-              Game in progress!
-            </p>
-          )}
-          {gameData.status === "completed" && (
-            <p className="text-center font-semibold text-blue-600 dark:text-blue-400">
-              Game completed.
-            </p>
-          )}
+  // --- Lobby View (status === 'waiting') ---
+  if (gameData.status === "waiting") {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center bg-gray-100 p-4 dark:bg-gray-900">
+        <Card className="mb-6 w-full max-w-2xl">
+          <CardHeader>
+            <CardTitle>Adventure Lobby: {gameData.metadata.concept}</CardTitle>
+            <CardDescription>Game ID: {gameId}</CardDescription>
+            <div className="pt-2">
+              <span className="mr-2 text-sm font-medium">Join Code:</span>
+              <Badge
+                variant="secondary"
+                className="cursor-pointer font-mono text-lg tracking-widest"
+                title="Click to copy (not implemented)"
+              >
+                {gameData.metadata.joinCode}
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <h3 className="mb-3 text-lg font-semibold">
+              Players ({Object.keys(gameData.players ?? {}).length}):
+            </h3>
+            <ul className="mb-6 list-inside list-disc space-y-1">
+              {gameData.players &&
+                Object.entries(gameData.players).map(([id, player]) => (
+                  <li key={id} className="flex items-center justify-between">
+                    <span>
+                      {player.name}
+                      {id === gameData.metadata.creator && (
+                        <Badge variant="outline" className="ml-2">
+                          Creator
+                        </Badge>
+                      )}
+                    </span>
+                  </li>
+                ))}
+              {!gameData.players && <li>No players yet.</li>}
+            </ul>
+
+            {gameData.status === "waiting" ? (
+              <p className="text-center text-gray-600 dark:text-gray-400">
+                Waiting for the creator to start the game...
+              </p>
+            ) : gameData.status === "active" ? (
+              <p className="text-center font-semibold text-green-600 dark:text-green-400">
+                Game in progress!
+              </p>
+            ) : (
+              <p className="text-center font-semibold text-blue-600 dark:text-blue-400">
+                Game completed.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Show start button only to creator when game is waiting */}
+        {canStartGame && (
+          <Button
+            onClick={handleStartGame}
+            disabled={startGameMutation.isPending}
+            size="lg"
+          >
+            {startGameMutation.isPending ? "Starting..." : "Start Game"}
+          </Button>
+        )}
+      </div>
+    );
+  }
+
+  // --- Completed/Other Status View ---
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center bg-gray-100 p-4 dark:bg-gray-900">
+      <Card className="w-full max-w-md">
+        <CardHeader>
+          <CardTitle>Game Status: {gameData.status}</CardTitle>
+          <CardDescription>
+            Concept: {gameData.metadata.concept}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <p>This game has concluded or is in an unexpected state.</p>
         </CardContent>
+        <CardFooter>
+          <Button onClick={() => router.push("/")}>Back to Home</Button>
+        </CardFooter>
       </Card>
-
-      {/* Show start button only to creator when game is waiting */}
-      {canStartGame && (
-        <Button onClick={handleStartGame} size="lg">
-          Start Game
-        </Button>
-      )}
-
-      {/* TODO: Add Join Game button/logic for non-creators if not automatically added on visit */}
-      {/* TODO: Add mechanism for users to enter join code if navigating directly */}
     </div>
   );
 }

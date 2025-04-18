@@ -3,6 +3,7 @@ import {
   CreateGameInputSchema,
   FindGameByJoinCodeInputSchema,
   JoinGameInputSchema,
+  StartGameInputSchema,
 } from "@/lib/zod/game";
 import { generateInitialGameState } from "@/server/ai/openai";
 import type { Game } from "@/types/game";
@@ -245,6 +246,68 @@ export const gameRouter = createTRPCRouter({
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: "Failed to join game.",
+          cause: error,
+        });
+      }
+    }),
+
+  startGame: protectedProcedure
+    .input(StartGameInputSchema)
+    .mutation(async ({ input, ctx }) => {
+      const { gameId } = input;
+      const userId = ctx.user.uid;
+
+      console.log(`User ${userId} attempting to start game ${gameId}`);
+
+      const gameRef = adminDb.ref(`games/${gameId}`);
+
+      try {
+        const snapshot = await gameRef.get();
+        if (!snapshot.exists()) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Game not found.",
+          });
+        }
+
+        const game = snapshot.val() as Game;
+        // TODO: Add validation for the game object
+
+        // 1. Check Status
+        if (game.status !== "waiting") {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `Game cannot be started (status: ${game.status}).`,
+          });
+        }
+
+        // 2. Check if user is the creator
+        if (game.metadata.creator !== userId) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Only the creator can start the game.",
+          });
+        }
+        // 3. Update game status to 'active'
+        // We only need to update the status field
+        await gameRef.child("status").set("active");
+
+        // Optionally, you could update the whole game object if other fields change at start
+        // await gameRef.update({ status: 'active', /* other start-game updates */ });
+
+        console.log(
+          `Game ${gameId} successfully started by creator ${userId}.`,
+        );
+        return { success: true, message: "Game started successfully!" };
+      } catch (error) {
+        if (error instanceof TRPCError) throw error;
+        console.error(
+          `Error starting game ${gameId} by user ${userId}:`,
+          error,
+        );
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to start game.",
           cause: error,
         });
       }
