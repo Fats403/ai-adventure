@@ -6,9 +6,11 @@
  * TL;DR - This is where all the tRPC server stuff is created and plugged in. The pieces you will
  * need to use are documented accordingly near the end.
  */
-import { initTRPC } from "@trpc/server";
+import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import { ZodError } from "zod";
+import { adminAuth } from "@/server/db/firebase-admin";
+import type { DecodedIdToken } from "firebase-admin/auth";
 
 /**
  * 1. CONTEXT
@@ -22,10 +24,47 @@ import { ZodError } from "zod";
  *
  * @see https://trpc.io/docs/server/context
  */
-export const createTRPCContext = async (opts: { headers: Headers }) => {
+
+interface CreateContextOptions {
+  headers: Headers;
+  user: DecodedIdToken | null;
+}
+
+const createInnerTRPCContext = (opts: CreateContextOptions) => {
   return {
-    ...opts,
+    headers: opts.headers,
+    user: opts.user,
   };
+};
+
+export const createTRPCContext = async (opts: { headers: Headers }) => {
+  const authHeader = opts.headers.get("Authorization");
+  let user: DecodedIdToken | null = null;
+
+  if (authHeader?.startsWith("Bearer ")) {
+    const idToken = authHeader.split("Bearer ")[1];
+    if (idToken) {
+      try {
+        user = await adminAuth.verifyIdToken(idToken);
+        console.log(`[TRPC Context] Verified token for user: ${user.uid}`);
+      } catch (error) {
+        console.warn(
+          `[TRPC Context] Token verification failed:`,
+          error instanceof Error ? error.message : error,
+        );
+        user = null;
+      }
+    }
+  } else {
+    console.log(
+      "[TRPC Context] No Authorization header found or not Bearer token.",
+    );
+  }
+
+  return createInnerTRPCContext({
+    headers: opts.headers,
+    user,
+  });
 };
 
 /**
@@ -76,19 +115,20 @@ export const createTRPCRouter = t.router;
  * You can remove this if you don't like it, but it can help catch unwanted waterfalls by simulating
  * network latency that would occur in production but not in local development.
  */
-const timingMiddleware = t.middleware(async ({ next, path }) => {
+const timingMiddleware = t.middleware(async ({ next, path, ctx }) => {
   const start = Date.now();
 
-  if (t._config.isDev) {
-    // artificial delay in dev
-    const waitMs = Math.floor(Math.random() * 400) + 100;
-    await new Promise((resolve) => setTimeout(resolve, waitMs));
-  }
-
-  const result = await next();
+  const result = await next({
+    ctx: {
+      ...ctx,
+    },
+  });
 
   const end = Date.now();
-  console.log(`[TRPC] ${path} took ${end - start}ms to execute`);
+  const userIndicator = ctx.user
+    ? `(User: ${ctx.user.uid})`
+    : "(Unauthenticated)";
+  console.log(`[TRPC] ${path} ${userIndicator} took ${end - start}ms`);
 
   return result;
 });
@@ -98,6 +138,35 @@ const timingMiddleware = t.middleware(async ({ next, path }) => {
  *
  * This is the base piece you use to build new queries and mutations on your tRPC API. It does not
  * guarantee that a user querying is authorized, but you can still access user session data if they
- * are logged in.
+ * are logged in (`ctx.user` will be populated if a valid token was sent).
  */
 export const publicProcedure = t.procedure.use(timingMiddleware);
+
+/**
+ * Protected (authenticated) procedure
+ *
+ * Middleware to enforce authentication. If the user is not authenticated, it throws an error.
+ * It assumes the `createTRPCContext` function attempts to populate `ctx.user`.
+ */
+const enforceUserIsAuthed = t.middleware(({ ctx, next }) => {
+  if (!ctx.user || !ctx.user.uid) {
+    console.warn("[TRPC Auth] Unauthorized attempt blocked.");
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message: "Authentication required.",
+    });
+  }
+  return next({
+    ctx: {
+      ...ctx,
+      user: ctx.user,
+    },
+  });
+});
+
+/**
+ * Use this procedure for API endpoints that require a logged-in user.
+ */
+export const protectedProcedure = t.procedure
+  .use(timingMiddleware)
+  .use(enforceUserIsAuthed);
